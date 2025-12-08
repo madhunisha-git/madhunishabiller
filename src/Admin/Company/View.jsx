@@ -70,9 +70,29 @@ export default function View() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this company permanently?')) return;
-    // Since you only have one table and no DELETE route yet, just warn
-    alert('Delete not implemented on backend yet');
+    if (!window.confirm('Delete this company permanently? This cannot be undone!')) return;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/company/${id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || 'Delete failed');
+      }
+
+      // Success feedback
+      setShowSuccess(true);
+      setTimeout(() => {
+        setShowSuccess(false);
+        fetchCompanies(); // Refresh list
+      }, 2000);
+
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+    }
   };
 
   if (loading) return <div className="text-center py-40 text-3xl">Loading companies...</div>;
