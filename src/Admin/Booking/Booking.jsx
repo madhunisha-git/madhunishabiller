@@ -1,4 +1,3 @@
-// src/pages/Booking.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from '../Sidebar/Sidebar';
 import Logout from '../../Admin/Logout';
@@ -7,6 +6,8 @@ import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { FaSearch, FaTrash, FaFilePdf, FaTimes, FaDownload } from 'react-icons/fa';
 import Modal from 'react-modal';
+import InvoiceTemplate from '../../Component/INvoiceTemplate';
+
 Modal.setAppElement("#root");
 
 const FloatingLabelInput = ({ value, onChange, placeholder, type = "text" }) => {
@@ -56,7 +57,7 @@ export default function Booking() {
 
   const [showModal, setShowModal] = useState(false);
   const [pdfUrl, setPdfUrl] = useState('');
-  const invoiceRef = useRef();
+  const invoiceRef = useRef(); // For preview capture
 
   const [search, setSearch] = useState('');
   const [productSearchResults, setProductSearchResults] = useState([]);
@@ -65,37 +66,17 @@ export default function Booking() {
 
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-  const splitAddressIntoTwo = (addr) => {
-    if (!addr) return ['', ''];
-    const a = addr.trim();
-    const kilRegex = /\bKil\b/i;
-    const kilMatch = a.match(kilRegex);
-    if (kilMatch) {
-      const idx = kilMatch.index;
-      const line1 = a.slice(0, idx).trim().replace(/,+$/, '');
-      const line2 = a.slice(idx).trim();
-      return [line1, line2];
-    }
-    const parts = a.split(',').map(p => p.trim()).filter(Boolean);
-    if (parts.length <= 2) return [parts.join(', '), ''];
-    const half = Math.ceil(parts.length / 2);
-    return [parts.slice(0, half).join(', '), parts.slice(half).join(', ')];
-  };
-
-  const numberToWords = (num) => {
-    const a = ['','One ','Two ','Three ','Four ','Five ','Six ','Seven ','Eight ','Nine ','Ten ','Eleven ','Twelve ','Thirteen ','Fourteen ','Fifteen ','Sixteen ','Seventeen ','Eighteen ','Nineteen '];
-    const b = ['', '', 'Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
-    if ((num = num.toString()).length > 9) return 'overflow';
-    const n = ('000000000' + num).substr(-9).match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
-    if (!n) return '';
-    let str = '';
-    str += (n[1] !== '00') ? (a[Number(n[1])] || (b[n[1][0]] + ' ' + a[n[1][1]])) + 'Crore ' : '';
-    str += (n[2] !== '00') ? (a[Number(n[2])] || (b[n[2][0]] + ' ' + a[n[2][1]])) + 'Lakh ' : '';
-    str += (n[3] !== '00') ? (a[Number(n[3])] || (b[n[3][0]] + ' ' + a[n[3][1]])) + 'Thousand ' : '';
-    str += (n[4] !== '0') ? (a[Number(n[4])] || (b[n[4][0]] + ' ' + a[n[4][1]])) + 'Hundred ' : '';
-    str += (n[5] !== '00') ? ((str !== '') ? 'and ' : '') + (a[Number(n[5])] || (b[n[5][0]] + ' ' + a[n[5][1]])) + 'Only' : '';
-    return str.trim() || 'Zero Rupees Only';
-  };
+  // Calculations
+  const subtotal = cart.reduce((s, i) => s + (i.cases || 0) * (i.rate_per_box || 0), 0);
+  const totalCases = cart.reduce((s, i) => s + (i.cases || 0), 0);
+  const packing = subtotal * (packingPercent / 100);
+  const gstBaseAmount = subtotal + packing;
+  const extraAmount = extraTaxable !== '' ? parseFloat(extraTaxable) || 0 : 0;
+  const cgst = isIGST ? 0 : gstBaseAmount * 0.09;
+  const sgst = isIGST ? 0 : gstBaseAmount * 0.09;
+  const igst = isIGST ? gstBaseAmount * 0.18 : 0;
+  const taxableValue = gstBaseAmount + extraAmount;
+  const netAmount = Math.round(taxableValue + cgst + sgst + igst);
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -110,7 +91,6 @@ export default function Booking() {
         const productsData = await productsRes.json();
         const customersData = await customersRes.json();
 
-        // Handle companies
         const companiesList = Array.isArray(companiesData) ? companiesData : [companiesData];
         setCompanies(companiesList);
         if (companiesList.length > 0) {
@@ -119,7 +99,6 @@ export default function Booking() {
           setCompany(firstCompany);
         }
 
-        // Handle products
         const normalized = (Array.isArray(productsData) ? productsData : []).map(p => ({
           ...p,
           id: p.id || p._id || Math.random().toString(36).slice(2),
@@ -136,7 +115,7 @@ export default function Booking() {
     };
 
     loadInitialData();
-  }, []);
+  }, [API_BASE_URL]);
 
   useEffect(() => {
     if (!selectedCompanyId || companies.length === 0) return;
@@ -147,7 +126,7 @@ export default function Booking() {
         ...found,
         company_name: (found.company_name || 'NISHA TRADERS').trim(),
         address: (found.address || '').trim(),
-        gstin: (found.gstin || '').trim(),           // Fixed: was "index.gstin"
+        gstin: (found.gstin || '').trim(),
         email: (found.email || '').trim(),
         logo_url: found.logo_url || '',
         signature_url: found.signature_url || '',
@@ -164,29 +143,22 @@ export default function Booking() {
         .slice(0, 2)
         .join('');
 
-      // Backend already returns the correct NEXT bill number (e.g. NT-002)
       fetch(`${API_BASE_URL}/api/latest?prefix=${prefix}`)
-        .then(r => {
-          if (!r.ok) throw new Error('Failed to fetch next bill number');
-          return r.json();
-        })
+        .then(r => r.ok ? r.json() : Promise.reject())
         .then(data => {
           const nextBillNo = data.bill_no || `${prefix}-001`;
-
           setSuggestedBillNo(nextBillNo);
-          setBillNumber(nextBillNo);     // This is what will be used
-          setManualBillNo('');           // Clear manual entry
+          setBillNumber(nextBillNo);
+          setManualBillNo('');
         })
-        .catch(err => {
-          console.error('Failed to load next bill number:', err);
+        .catch(() => {
           const fallback = `${prefix}-001`;
           setSuggestedBillNo(fallback);
           setBillNumber(fallback);
         });
     }
-  }, [selectedCompanyId, companies]);
+  }, [selectedCompanyId, companies, API_BASE_URL]);
 
-  // Auto revert to suggested when manual is cleared
   useEffect(() => {
     if (!manualBillNo.trim()) {
       setBillNumber(suggestedBillNo);
@@ -211,7 +183,6 @@ export default function Booking() {
       try {
         setLoadingStates(true);
         const response = await fetch(`${API_BASE_URL}/api/states`);
-        if (!response.ok) throw new Error('Failed');
         const data = await response.json();
         setStates(data);
       } catch (err) {
@@ -221,7 +192,7 @@ export default function Booking() {
       }
     };
     fetchStates();
-  }, []);
+  }, [API_BASE_URL]);
 
   const addProductToCart = (p) => {
     if (!p) return;
@@ -238,26 +209,12 @@ export default function Booking() {
     setCart(cart.filter(item => item.uniqueId !== uniqueId));
   };
 
-  const subtotal = cart.reduce((s, i) => s + (i.cases || 0) * (i.rate_per_box || 0), 0);
-  const totalCases = cart.reduce((s, i) => s + (i.cases || 0), 0);
-  const packing = subtotal * (packingPercent / 100);
-  const gstBaseAmount = subtotal + packing;
-  const extraAmount = extraTaxable !== '' ? parseFloat(extraTaxable) || 0 : 0;
-  const cgst = isIGST ? 0 : gstBaseAmount * 0.09;
-  const sgst = isIGST ? 0 : gstBaseAmount * 0.09;
-  const igst = isIGST ? gstBaseAmount * 0.18 : 0;
-  const taxableValue = gstBaseAmount + extraAmount;
-  const netAmount = Math.round(taxableValue + cgst + sgst + igst);
-
   const generateAndShowPDF = async () => {
     if (!customer.name || cart.length === 0) {
       alert('Please fill customer name and add at least one product');
       return;
     }
-    if (pdfUrl) {
-      URL.revokeObjectURL(pdfUrl);
-      setPdfUrl('');
-    }
+
     setShowModal(true);
     try {
       const canvas = await html2canvas(invoiceRef.current, { scale: 3, useCORS: true });
@@ -269,50 +226,49 @@ export default function Booking() {
       const pdfBlob = pdf.output('blob');
       const pdfUrlTemp = URL.createObjectURL(pdfBlob);
       setPdfUrl(pdfUrlTemp);
-      document.getElementById('pdf-preview').src = pdfUrlTemp;
 
-      const formData = new FormData();
-      formData.append('pdf', pdfBlob, `${billNumber || 'invoice'}.pdf`);
-      formData.append('customer_name', customer.name);
-      formData.append('customer_address', customer.address || '');
-      formData.append('customer_gstin', customer.gstin || '');
-      formData.append('customer_place', customer.place || '');
-      formData.append('customer_state_code', isIGST ? 'other' : '33');
-      formData.append('through', through);
-      formData.append('destination', destination || '');
-      formData.append('items', JSON.stringify(cart.map(item => ({
-        productname: item.productname,
-        brand: item.brand || '',
-        hsn_code: item.hsn || '360410',
-        cases: item.cases,
-        rate_per_box: item.rate_per_box,
-        per_case: 1
-      }))));
-      formData.append('subtotal', subtotal);
-      formData.append('packing_amount', packing);
-      formData.append('extra_amount', extraAmount);
-      formData.append('cgst_amount', cgst);
-      formData.append('sgst_amount', sgst);
-      formData.append('igst_amount', igst);
-      formData.append('net_amount', netAmount);
-      formData.append('bill_no', manualBillNo || billNumber);
+      // Save booking data only (no PDF)
+      const bookingData = {
+        customer_name: customer.name,
+        customer_address: customer.address || '',
+        customer_gstin: customer.gstin || '',
+        customer_place: customer.place || '',
+        customer_state_code: isIGST ? 'other' : '33',
+        through,
+        destination: destination || '',
+        items: JSON.stringify(cart.map(item => ({
+          productname: item.productname,
+          hsn_code: item.hsn || '360410',
+          cases: item.cases,
+          rate_per_box: item.rate_per_box,
+        }))),
+        subtotal,
+        packing_amount: packing,
+        extra_amount: extraAmount,
+        cgst_amount: cgst,
+        sgst_amount: sgst,
+        igst_amount: igst,
+        net_amount: netAmount,
+        bill_no: manualBillNo || billNumber,
+        company_name: company.company_name  // ← This is now saved
+      };
 
       const res = await fetch(`${API_BASE_URL}/api/bookings`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookingData),
       });
+
       if (res.ok) {
         const data = await res.json();
-        setBillNumber(data.booking.bill_no);
         alert(`Bill saved successfully! Bill No: ${data.booking.bill_no}`);
       } else {
         const error = await res.text();
-        console.error("Save failed:", error);
-        alert('PDF generated but failed to save on server');
+        alert('Failed to save bill: ' + error);
       }
     } catch (err) {
       console.error(err);
-      alert('Failed to generate or save PDF');
+      alert('Failed to generate PDF or save bill');
     }
   };
 
@@ -324,7 +280,7 @@ export default function Booking() {
     a.click();
   };
 
-  if (!company && companies.length === 0) {
+  if (!company) {
     return (
       <div className="flex min-h-screen">
         <Sidebar />
@@ -333,7 +289,6 @@ export default function Booking() {
     );
   }
 
-  const [addrLine1, addrLine2] = splitAddressIntoTwo(company?.address || '');
   const filteredCustomers = recentCustomers.filter(c =>
     c.customer_name.toLowerCase().includes(customerSearch.toLowerCase())
   );
@@ -562,329 +517,37 @@ export default function Booking() {
               </div>
             </div>
           </div>
-
-          <div className="bg-white p-10 rounded shadow" style={{ border: '1px solid #111' }}>
-            <div
-              ref={invoiceRef}
-              style={{
-                width: "210mm",
-                padding: 20,
-                background: "#fff",
-                color: "#000",
-                fontFamily: "Arial, sans-serif",
-                boxSizing: "border-box",
+          <div className="bg-white w-[68.2%] p-10 rounded shadow" style={{ border: '1px solid #111' }} ref={invoiceRef}>
+            <InvoiceTemplate
+              booking={{
+                customer_name: customer.name,
+                customer_address: customer.address,
+                customer_gstin: customer.gstin,
+                customer_place: customer.place,
+                through,
+                destination,
+                bill_no: manualBillNo || billNumber,
+                items: JSON.stringify(cart.map(i => ({
+                  productname: i.productname,
+                  cases: i.cases,
+                  rate_per_box: i.rate_per_box
+                }))),
+                subtotal,
+                packing_amount: packing,
+                extra_amount: extraAmount,
+                cgst_amount: cgst,
+                sgst_amount: sgst,
+                igst_amount: igst,
+                net_amount: netAmount,
+                customer_state_code: isIGST ? 'other' : '33'
               }}
-            >
-              <div style={{ border: "1px solid #000" }}>
-                {/* HEADER */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    borderBottom: "1px double #000",
-                    padding: "10px 20px",
-                  }}
-                >
-                  <div style={{ width: "150px" }}>
-                    {company?.logo_url && (
-                      <img
-                        src={company.logo_url}
-                        style={{ width: "100%", height: 90, objectFit: "contain" }}
-                      />
-                    )}
-                  </div>
-
-                  <div
-                    style={{
-                      flex: 1,
-                      textAlign: "center",
-                      lineHeight: 1.4,
-                    }}
-                  >
-                    <div style={{ fontSize: 32, fontWeight: 900, textTransform: "uppercase" }}>
-                      {company?.company_name || "NISHA TRADERS"}
-                    </div>
-                    <div style={{ fontSize: 15 }}>{addrLine1}</div>
-                    <div style={{ fontSize: 15 }}>{addrLine2}</div>
-                    <div style={{ fontSize: 14 }}>
-                      GSTIN: {company?.gstin || ""} &nbsp;&nbsp; Email: {company?.email || ""}
-                    </div>
-                  </div>
-
-                  <div style={{ width: "150px" }} />
-                </div>
-
-                {/* CUSTOMER + BILL INFO */}
-                <div style={{ display: "flex", borderBottom: "1px solid #000" }}>
-                  <div
-                    style={{
-                      flex: 1,
-                      padding: 15,
-                      fontSize: 14,
-                      borderRight: "1px solid #000",
-                    }}
-                  >
-                    <strong>To:</strong>
-                    <div style={{ fontSize: 15, fontWeight: 700, marginTop: 2 }}>
-                      {customer.name || "______________________"}
-                    </div>
-                    {(customer.address || "").split("\n").map((line, i) => (
-                      <div key={i}>{line}</div>
-                    ))}
-
-                    <div style={{ marginTop: 6 }}>GSTIN : {customer.gstin || "---"}</div>
-                    <div style={{ marginTop: 6 }}>
-                      Place of Supply :{" "}
-                      {(() => {
-                        if (!customer.place) return "33 - Tamil Nadu";
-                        const s = states.find((st) => st.state_name === customer.place);
-                        return s ? `${s.code} - ${s.state_name}` : customer.place;
-                      })()}
-                    </div>
-                  </div>
-
-                  <div style={{ width: 383, padding: 15, fontSize: 14 }}>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        borderBottom: "1px solid #000",
-                        paddingBottom: 6,
-                      }}
-                    >
-                      <div>
-                        No. : <strong>{billNumber}</strong>
-                      </div>
-                      <div>Date : {format(new Date(), "dd/MM/yyyy")}</div>
-                    </div>
-
-                    <div style={{ marginTop: 6 }}>Through : {through}</div>
-                    <div style={{ marginTop: 6 }}>No. of Cases : {totalCases} Cases</div>
-                    <div style={{ marginTop: 6 }}>
-                      Destination : {destination || customer.place || "__________"}
-                    </div>
-                  </div>
-                </div>
-
-                {/* TABLE */}
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                    textAlign: "center",
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      {[
-                        ["COMPANY", "14%"],
-                        [
-                          <span>
-                            PRODUCT NAME{" "}
-                            <span style={{ fontSize: "15px", fontWeight: 900 }}>
-                              HSN: 360410
-                            </span>
-                          </span>,
-                          "35%",
-                        ],
-                        ["CASES", "8%"],
-                        ["QUANTITY", "14%"],
-                        ["RATE PER", "16%"],
-                        ["AMOUNT", "20%"],
-                      ].map(([label, width], index, arr) => (
-                        <th
-                          key={index}
-                          style={{
-                            padding: 6,
-                            width,
-                            background: "#f1f1f1",
-                            fontWeight: 700,
-                            borderRight: index === arr.length - 1 ? 0 : "1px solid #000",
-                            borderBottom: "1px solid #000",
-                          }}
-                        >
-                          {label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {cart.map((it) => (
-                      <tr key={it.uniqueId}>
-                        <td style={{ borderBottom: "1px solid #000", padding: 6 }}></td>
-
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 6 }}>
-                          {it.productname}
-                        </td>
-
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 6, fontWeight: 700 }}>
-                          {it.cases}
-                        </td>
-
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 6 }}>
-                          {it.cases} Case
-                        </td>
-
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 6 }}>
-                          {(it.rate_per_box || 0).toFixed(2)}
-                        </td>
-
-                        <td
-                          style={{
-                            borderBottom: "1px solid #000", borderLeft: "1px solid #000",
-                            padding: 6,
-                            fontWeight: 700,
-                          }}
-                        >
-                          {((it.cases || 0) * (it.rate_per_box || 0)).toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-
-                    {/* AUTO BLANK ROWS UNTIL 10 */}
-                    {Array.from({ length: Math.max(0, 10 - cart.length) }).map((_, i) => (
-                      <tr key={"blank-" + i}>
-                        <td style={{ borderBottom: "1px solid #000", padding: 12 }}>
-                          &nbsp;
-                        </td>
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 12 }}>&nbsp;</td>
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 12 }}>&nbsp;</td>
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 12 }}>&nbsp;</td>
-                        <td style={{ borderBottom: "1px solid #000", borderLeft: "1px solid #000", padding: 12 }}>&nbsp;</td>
-                        <td
-                          style={{
-                            borderBottom: "1px solid #000", borderLeft: "1px solid #000",
-                            borderRight: 0,
-                            padding: 12,
-                          }}
-                        >
-                          &nbsp;
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {/* TOTAL + BANK */}
-                <div style={{ display: "flex", borderBottom: "1px solid #000" }}>
-                  <div
-                    style={{
-                      flex: 1,
-                      fontSize: 12,
-                      padding: 12,
-                      borderRight: "1px solid #000",
-                    }}
-                  >
-                    <div style={{ marginBottom: 6 }}>
-                      <strong>Total Cases: {totalCases}</strong>
-                    </div>
-
-                    <div>
-                      <strong>Our Bank Account:</strong>
-                      <div>Bank: {company?.bank_name || "Tamilnad Mercantile Bank"}</div>
-                      <div>Branch: {company?.branch || "SIVAKASI"}</div>
-                      <div>A/c No.: {company?.account_no || ""}</div>
-                      <div>IFSC: {company?.ifsc_code || ""}</div>
-                    </div>
-                  </div>
-
-                  <div style={{ width: 383, padding: 12, fontSize: 12 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <tbody>
-                        <tr>
-                          <td>Total</td>
-                          <td style={{ textAlign: "right" }}>{subtotal.toFixed(2)}</td>
-                        </tr>
-                        <tr>
-                          <td>Taxable Value</td>
-                          <td style={{ textAlign: "right" }}>{taxableValue.toFixed(2)}</td>
-                        </tr>
-                        {!isIGST && (
-                          <>
-                            <tr>
-                              <td>CGST 9%</td>
-                              <td style={{ textAlign: "right" }}>{cgst.toFixed(2)}</td>
-                            </tr>
-                            <tr>
-                              <td>SGST 9%</td>
-                              <td style={{ textAlign: "right" }}>{sgst.toFixed(2)}</td>
-                            </tr>
-                          </>
-                        )}
-                        {isIGST && (
-                          <tr>
-                            <td>IGST 18%</td>
-                            <td style={{ textAlign: "right" }}>{igst.toFixed(2)}</td>
-                          </tr>
-                        )}
-
-                        <tr style={{ fontWeight: 800, borderTop: "1px solid #000", marginTop: 2 }}>
-                          <td>NET AMOUNT</td>
-                          <td style={{ textAlign: "right" }}>{netAmount.toFixed(2)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* AMOUNT IN WORDS */}
-                <div
-                  style={{
-                    textAlign: "center",
-                    padding: "10px 0",
-                    borderBottom: "1px solid #000",
-                    fontWeight: 700,
-                  }}
-                >
-                  Rupees {numberToWords(netAmount)} Only
-                </div>
-
-                {/* TERMS + SIGN */}
-                <div style={{ display: "flex" }}>
-                  <div
-                    style={{
-                      flex: 1,
-                      padding: 12,
-                      fontSize: 12,
-                      borderRight: "1px solid #000",
-                    }}
-                  >
-                    <strong>TERMS & CONDITIONS:</strong>
-                    <div>• Goods once sold cannot be taken back</div>
-                    <div>• We are not responsible for damage / shortage</div>
-                    <div>• Subject to SIVAKASI jurisdiction</div>
-                    <div style={{ marginTop: 5 }}>• E.&O.E.</div>
-                  </div>
-
-                  <div
-                    style={{
-                      width: 383,
-                      padding: 12,
-                      fontSize: 14,
-                      textAlign: "center",
-                    }}
-                  >
-                    <div>For {company?.company_name || "NISHA TRADERS"}</div>
-
-                    <div style={{ marginTop: 20, flex:1, justifyContent: 'center', paddingLeft: '30%' }}>
-                      {company?.signature_url ? (
-                        <img
-                          src={company.signature_url}
-                          style={{ height: 60, objectFit: "contain" }}
-                        />
-                      ) : (
-                        <div style={{ borderTop: "1px solid #000", height: 60 }} />
-                      )}
-                    </div>
-
-                    <div style={{ marginTop: 5, fontWeight: 700 }}>Partner / Manager</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+              company={company}
+              states={states}
+              billDate={new Date()}
+            />
           </div>
 
+          {/* Modal remains the same */}
           <Modal isOpen={showModal} onRequestClose={() => setShowModal(false)} className="bg-white rounded shadow-lg max-w-6xl mx-4 my-8" overlayClassName="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
             <div className="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-4 flex justify-between items-center rounded-t">
               <h2 className="text-xl font-bold">Tax Invoice - {billNumber}</h2>
@@ -894,7 +557,7 @@ export default function Booking() {
               </div>
             </div>
             <div style={{ width: '100%', height: '80vh', background: '#f2f2f2' }}>
-              <iframe id="pdf-preview" title="PDF Preview" style={{ width: '100%', height: '100%', border: 0 }} src={pdfUrl || ''}></iframe>
+              <iframe title="PDF Preview" style={{ width: '100%', height: '100%', border: 0 }} src={pdfUrl || ''}></iframe>
             </div>
           </Modal>
         </div>
