@@ -6,7 +6,7 @@ import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { FaSearch, FaTrash, FaFilePdf, FaTimes, FaDownload } from 'react-icons/fa';
 import Modal from 'react-modal';
-import InvoiceTemplate from '../../Component/INvoiceTemplate';
+import InvoiceTemplate from '../../Component/InvoiceTemplate';
 
 Modal.setAppElement("#root");
 
