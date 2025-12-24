@@ -6,7 +6,7 @@ import Modal from 'react-modal';
 import { FaEye, FaDownload, FaTimes, FaSpinner, FaSearch } from 'react-icons/fa';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
-import InvoiceTemplate from '../../Component/INvoiceTemplate';
+import InvoiceTemplate from '../../Component/InvoiceTemplate'
 import { createRoot } from 'react-dom/client';
 
 Modal.setAppElement("#root");
