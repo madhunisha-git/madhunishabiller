@@ -196,7 +196,12 @@ export default function Booking() {
 
   const addProductToCart = (p) => {
     if (!p) return;
-    const newItem = { ...p, cases: 1, uniqueId: Date.now() + Math.random() };
+    const newItem = {
+      ...p,
+      cases: 1,
+      rate_per_box: p.rate_per_box || 0,  // Ensure default rate is set
+      uniqueId: Date.now() + Math.random()
+    };
     setCart(prev => [...prev, newItem]);
   };
 
@@ -207,6 +212,13 @@ export default function Booking() {
 
   const removeItem = (uniqueId) => {
     setCart(cart.filter(item => item.uniqueId !== uniqueId));
+  };
+
+  const updateRate = (uniqueId, newRate) => {
+    const rate = parseFloat(newRate) || 0;
+    setCart(cart.map(item => 
+      item.uniqueId === uniqueId ? { ...item, rate_per_box: rate } : item
+    ));
   };
 
   const generateAndShowPDF = async () => {
@@ -492,10 +504,34 @@ export default function Booking() {
                   <div key={item.uniqueId} className="flex items-center gap-3 py-2 border-b">
                     <div className="flex-1">
                       <div className="font-medium">{item.productname}</div>
-                      <div className="text-xs text-gray-600">₹{item.rate_per_box}/box</div>
+                      <div className="text-xs text-gray-600">HSN: {item.hsn || '360410'}</div>
                     </div>
-                    <input type="number" min="1" value={item.cases} onChange={e => updateCases(item.uniqueId, e.target.value)} className="w-20 px-2 py-1 border rounded text-center" />
-                    <button onClick={() => removeItem(item.uniqueId)} className="text-red-600"><FaTrash /></button>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <div className="text-xs text-gray-500">Rate/box</div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={item.rate_per_box}
+                          onChange={(e) => updateRate(item.uniqueId, e.target.value)}
+                          className="w-28 px-2 py-1 border rounded text-right font-medium focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-gray-500">Cases</div>
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.cases}
+                          onChange={e => updateCases(item.uniqueId, e.target.value)}
+                          className="w-20 px-2 py-1 border rounded text-center"
+                        />
+                      </div>
+                      <button onClick={() => removeItem(item.uniqueId)} className="text-red-600 mt-4">
+                        <FaTrash />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
