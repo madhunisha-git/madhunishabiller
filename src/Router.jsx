@@ -22,6 +22,7 @@ const AllRoutes = () => {
         <Route path="/book" element={<Booking />} />
         <Route path="/company" element={<Company />} />
         <Route path="/view" element={<View />} />
+        <Route path='/allbookings' element={<AllBookings/>}/>
       </Route>
     </Routes>
   );

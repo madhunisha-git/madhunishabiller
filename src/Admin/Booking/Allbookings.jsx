@@ -1,9 +1,13 @@
 // src/pages/AllBookings/AllBookings.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from '../Sidebar/Sidebar';
 import Logout from '../Logout';
 import Modal from 'react-modal';
 import { FaEye, FaDownload, FaTimes, FaSpinner, FaSearch } from 'react-icons/fa';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
+import InvoiceTemplate from '../../Component/InvoiceTemplate';
+import { createRoot } from 'react-dom/client';
 
 Modal.setAppElement("#root");
 
@@ -14,37 +18,58 @@ export default function AllBookings() {
   const [showModal, setShowModal] = useState(false);
   const [pdfBlobUrl, setPdfBlobUrl] = useState('');
   const [loadingPDF, setLoadingPDF] = useState(false);
-  const [loading, setLoading] = useState(true); // Full page loading
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 16;
+  const [states, setStates] = useState([]);
+  const [companies, setCompanies] = useState([]); // All companies
+  const [selectedCompany, setSelectedCompany] = useState(null); // For current bill
+
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-  // FETCH ALL BOOKINGS
+  const hiddenContainerRef = useRef(null);
+  const rootRef = useRef(null);
+
   useEffect(() => {
-    fetch(`${API_BASE_URL}/api/booking`)
-      .then(res => res.json())
-      .then(data => {
-        // Sort by bill_date (newest first)
-        const sorted = data.sort((a, b) => new Date(b.bill_date) - new Date(a.bill_date));
+    const loadData = async () => {
+      try {
+        const [bookingsRes, statesRes, companiesRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/bookings`),
+          fetch(`${API_BASE_URL}/api/states`),
+          fetch(`${API_BASE_URL}/api/companies`)
+        ]);
+
+        const bookingsData = await bookingsRes.json();
+        const statesData = await statesRes.json();
+        const companiesData = await companiesRes.json();
+
+        const sorted = bookingsData.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
         setBookings(sorted);
         setFilteredBookings(sorted);
-      })
-      .catch(() => alert('Failed to load bookings'))
-      .finally(() => setLoading(false));
-  }, []);
+        setStates(statesData);
+        setCompanies(Array.isArray(companiesData) ? companiesData : [companiesData]);
+      } catch (err) {
+        console.error(err);
+        alert('Failed to load data');
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, [API_BASE_URL]);
 
-  // SEARCH FILTER
+  // Search
   useEffect(() => {
     const query = searchQuery.toLowerCase().trim();
     const filtered = bookings.filter(b =>
-      b.customer_name?.toLowerCase().includes(query)
+      b.customer_name?.toLowerCase().includes(query) ||
+      b.bill_no?.toLowerCase().includes(query)
     );
     setFilteredBookings(filtered);
-    setCurrentPage(1); // Reset to first page
+    setCurrentPage(1);
   }, [searchQuery, bookings]);
 
-  // PAGINATION
   const totalPages = Math.ceil(filteredBookings.length / itemsPerPage);
   const paginatedBookings = filteredBookings.slice(
     (currentPage - 1) * itemsPerPage,
@@ -52,59 +77,94 @@ export default function AllBookings() {
   );
 
   const goToPage = (page) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-    }
+    if (page >= 1 && page <= totalPages) setCurrentPage(page);
   };
 
-  // VIEW PDF
   const viewBill = async (booking) => {
     setSelectedBill(booking);
     setShowModal(true);
     setLoadingPDF(true);
     setPdfBlobUrl('');
 
-    try {
-      const res = await fetch(`${API_BASE_URL}${booking.pdf_path}`);
-      if (!res.ok) throw new Error('Failed to load PDF');
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      setPdfBlobUrl(url);
-    } catch (err) {
-      alert('Could not load PDF: ' + err.message);
-    } finally {
-      setLoadingPDF(false);
+    // Find the correct company by company_name saved in booking
+    const billCompany = companies.find(c => 
+      c.company_name?.trim().toUpperCase() === (booking.company_name || '').trim().toUpperCase()
+    ) || companies[0]; // fallback to first
+
+    setSelectedCompany(billCompany);
+
+    if (!hiddenContainerRef.current) {
+      hiddenContainerRef.current = document.createElement('div');
+      hiddenContainerRef.current.style.position = 'absolute';
+      hiddenContainerRef.current.style.left = '-9999px';
+      hiddenContainerRef.current.style.top = '0';
+      hiddenContainerRef.current.style.width = '210mm';
+      hiddenContainerRef.current.style.padding = '20px';
+      hiddenContainerRef.current.style.background = 'white';
+      document.body.appendChild(hiddenContainerRef.current);
     }
+
+    if (rootRef.current) rootRef.current.unmount();
+
+    rootRef.current = createRoot(hiddenContainerRef.current);
+    rootRef.current.render(
+      <InvoiceTemplate
+        booking={booking}
+        company={billCompany || {}}
+        states={states}
+        billDate={booking.created_at}
+      />
+    );
+
+    setTimeout(async () => {
+      try {
+        const canvas = await html2canvas(hiddenContainerRef.current, {
+          scale: 3,
+          useCORS: true,
+          logging: false,
+        });
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const width = pdf.internal.pageSize.getWidth();
+        const height = (canvas.height * width) / canvas.width;
+        pdf.addImage(imgData, 'PNG', 0, 0, width, height);
+        const blob = pdf.output('blob');
+        const url = URL.createObjectURL(blob);
+        setPdfBlobUrl(url);
+      } catch (err) {
+        console.error('PDF generation failed:', err);
+        alert('Failed to generate PDF');
+      } finally {
+        setLoadingPDF(false);
+      }
+    }, 600);
   };
 
   const downloadPDF = () => {
-    if (!selectedBill) return;
+    if (!pdfBlobUrl || !selectedBill) return;
     const link = document.createElement('a');
-    link.href = `${API_BASE_URL}${selectedBill.pdf_path}`;
-    link.download = `${selectedBill.bill_number}.pdf`;
+    link.href = pdfBlobUrl;
+    link.download = `${selectedBill.bill_no}.pdf`;
     link.click();
   };
 
-  // Clean up blob URL
   useEffect(() => {
     return () => {
+      if (rootRef.current) rootRef.current.unmount();
+      if (hiddenContainerRef.current?.parentNode) {
+        hiddenContainerRef.current.parentNode.removeChild(hiddenContainerRef.current);
+      }
       if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
     };
   }, [pdfBlobUrl]);
 
-  // FORMAT DATE SAFELY
   const formatDate = (dateString) => {
     if (!dateString) return '—';
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return 'Invalid Date';
-    return date.toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric'
+    return new Date(dateString).toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric'
     });
   };
 
-  // FULL LOADING SCREEN
   if (loading) {
     return (
       <div className="flex min-h-screen bg-gray-100 dark:bg-gray-900">
@@ -127,53 +187,45 @@ export default function AllBookings() {
 
       <div className="flex-1 p-4 pt-16 overflow-auto">
         <div className="max-w-7xl mx-auto">
-
-          {/* Header */}
           <h2 className="text-xl md:text-2xl font-bold text-center mb-4 text-gray-900 dark:text-gray-100">
             All Bookings
           </h2>
 
-          {/* Search Bar */}
           <div className="mb-6 relative max-w-md mx-auto">
             <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
             <input
               type="text"
-              placeholder="Search by customer name..."
+              placeholder="Search by customer or bill no..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
-          {/* Results Count */}
           <p className="text-center text-sm text-gray-600 dark:text-gray-400 mb-4">
             {filteredBookings.length} booking{filteredBookings.length !== 1 ? 's' : ''} found
           </p>
 
-          {/* Cards Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
             {paginatedBookings.map(b => (
-              <div
-                key={b.id}
-                className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow hover:shadow-lg transition-shadow"
-              >
+              <div key={b.id} className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow hover:shadow-lg transition-shadow">
                 <p className="font-semibold text-sm md:text-base text-gray-900 dark:text-gray-100 truncate">
-                  {b.customer_name}
+                  {b.customer_name || '—'}
                 </p>
                 <p className="text-xs md:text-sm text-gray-600 dark:text-gray-400">
-                  Bill: <span className="font-mono">{b.bill_number}</span>
+                  Bill: <span className="font-mono">{b.bill_no}</span>
                 </p>
                 <p className="text-xs text-sky-500 truncate">
-                  {b.from} to {b.to}
+                  {b.through || 'DIRECT'} → {b.destination || b.customer_place || '—'}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  {formatDate(b.bill_date)}
+                  {formatDate(b.created_at)}
                 </p>
                 <button
                   onClick={() => viewBill(b)}
                   className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-xs md:text-sm flex items-center justify-center gap-1 transition"
                 >
-                  <FaEye className="h-3 w-3 md:h-4 md:w-4" /> View
+                  <FaEye className="h-4 w-4" /> View
                 </button>
               </div>
             ))}
@@ -182,35 +234,18 @@ export default function AllBookings() {
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex justify-center items-center gap-2 mt-6">
-              <button
-                onClick={() => goToPage(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="px-3 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
+              <button onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 1}
+                className="px-3 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50">
                 Previous
               </button>
-
-              <div className="flex gap-1">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
-                  <button
-                    key={page}
-                    onClick={() => goToPage(page)}
-                    className={`px-3 py-1 rounded text-sm font-medium transition ${
-                      currentPage === page
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={() => goToPage(currentPage + 1)}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                <button key={page} onClick={() => goToPage(page)}
+                  className={`px-3 py-1 rounded text-sm ${currentPage === page ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700'}`}>
+                  {page}
+                </button>
+              ))}
+              <button onClick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages}
+                className="px-3 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-50">
                 Next
               </button>
             </div>
@@ -218,60 +253,40 @@ export default function AllBookings() {
         </div>
       </div>
 
-      {/* PDF Modal */}
       <Modal
         isOpen={showModal}
         onRequestClose={() => setShowModal(false)}
         className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full mx-4 my-8 outline-none overflow-hidden"
-        overlayClassName="fixed inset-0 bg-black/50 bg-opacity-60 flex items-center justify-center z-50 p-4"
-        closeTimeoutMS={200}
+        overlayClassName="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       >
         {selectedBill && (
           <div className="flex flex-col h-full max-h-screen">
             <div className="flex justify-between items-center p-4 border-b dark:border-gray-700">
               <h2 className="text-lg md:text-xl font-bold text-gray-900 dark:text-gray-100">
-                Bill: {selectedBill.bill_number}
+                Bill: {selectedBill.bill_no}
               </h2>
               <div className="flex gap-2">
-                <button
-                  onClick={downloadPDF}
-                  className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-sm flex items-center gap-1 transition"
-                >
-                  <FaDownload className="h-3 w-3" /> Download
+                <button onClick={downloadPDF}
+                  className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-sm flex items-center gap-1">
+                  <FaDownload className="h-4 w-4" /> Download
                 </button>
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded text-sm flex items-center gap-1 transition"
-                >
-                  <FaTimes className="h-3 w-3" /> Close
+                <button onClick={() => setShowModal(false)}
+                  className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded text-sm flex items-center gap-1">
+                  <FaTimes className="h-4 w-4" /> Close
                 </button>
               </div>
             </div>
-
             <div className="flex-1 bg-gray-50 dark:bg-gray-900 p-2 md:p-4 overflow-auto">
               {loadingPDF ? (
                 <div className="flex items-center justify-center h-64">
                   <FaSpinner className="animate-spin h-8 w-8 text-blue-600" />
                 </div>
               ) : pdfBlobUrl ? (
-                <embed
-                  src={pdfBlobUrl}
-                  type="application/pdf"
-                  className="w-full h-full min-h-96 border-0"
-                  style={{ minHeight: '500px' }}
-                />
+                <embed src={pdfBlobUrl} type="application/pdf" className="w-full h-full border-0" style={{ minHeight: '600px' }} />
               ) : (
-                <p className="text-center text-red-600">Failed to load PDF</p>
+                <p className="text-center text-red-600">Failed to generate PDF</p>
               )}
             </div>
-
-            {pdfBlobUrl && (
-              <div className="p-2 text-center text-xs text-gray-500">
-                <a href={pdfBlobUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
-                  Open in new tab (if PDF doesn't show)
-                </a>
-              </div>
-            )}
           </div>
         )}
       </Modal>
